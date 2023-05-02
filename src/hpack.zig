@@ -1,3 +1,5 @@
+//! Decodes HPACK headers and encodes them as simply as possible
+
 const std = @import("std");
 const Type = std.builtin.Type;
 const mem = std.mem;
@@ -16,8 +18,13 @@ const HdrConst = hdrIndx.HdrConst;
 const Hdr = hdrIndx.Hdr;
 const STATIC_INDX = hdrIndx.STATIC_INDX;
 
+/// An iterator that takes I/O buffers, a decoding table and returns
+/// header entries. The table is mutated so you can't run the iterator
+/// twice.
 pub const Decoder = struct {
+    /// buffer containing the encoded data
     from: []const u8,
+    /// A scratch buffer for decoded headers
     to: []u8,
     table: hdrIndx.Table = hdrIndx.Table{},
 
@@ -33,6 +40,8 @@ pub const Decoder = struct {
         self.to = to;
     }
 
+    /// Get the next header. The contents of the header may be
+    /// borrowed from the scratch buffer or the table's buffer.
     pub fn next(self: *Decoder) !HdrConst {
         if (self.from.len < 1)
             return error.EndOfData;
@@ -85,6 +94,7 @@ pub const Decoder = struct {
     }
 };
 
+/// Very lazy HPACK encoder
 pub const Encoder = struct {
     to: []u8,
     used: usize = 0,
@@ -188,6 +198,23 @@ fn encodeInt(comptime n: u3, val: anytype, buf: []u8) !usize {
     return k;
 }
 
+/// Decode a string which if it is not Huffman encoded is fairly
+/// straight forward.
+///
+/// If it is Huffman encoded then we have to deal with the fact
+/// Huffman codes are not byte aligned and are variable length.
+///
+/// We could put the huffman codes in a binary tree and lookup one bit
+/// at a time. However I doubt this is the right place to start on
+/// common CPUs.
+///
+/// So instead we shift (at most) the next four bytes into a
+/// buffer. Then compare the first bits of the first byte to the
+/// shortest huffman codes. If it doesn't match any, then move on to
+/// longer codes until we are comparing all four bytes.
+///
+/// I haven't done any research into the fastest methods of Huffman
+/// decoding. This is just a first approximation.
 fn decodeStr(from: *[]const u8, to: *[]u8) ![]const u8 {
     const huffman = from.*[0] & 0x80 == 0x80;
     const len = try decodeInt(u16, 7, from);

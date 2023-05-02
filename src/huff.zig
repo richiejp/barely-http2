@@ -1,27 +1,36 @@
+//! Static Huffman encoding specified by HPACK to encode single bytes
 const std = @import("std");
 const sort = std.sort.sort;
 const expectEqual = std.testing.expectEqual;
 const expect = std.testing.expect;
 
+/// Entry in the Huffman encoding table
 const Enhuff = struct {
+    /// The unencoded byte value
     sym: u8 = 0,
+    /// The encoded byte value, may be up to 4 bytes long
     code: []const u8,
+    /// The bit length of code
     len: u5,
 };
 
+/// A Group of Huffman encodings of the same length. Used for decoding.
 const Dehuff = struct {
     len: u5,
     codes: []const Enhuff,
 };
 
+/// Huffman encoding table
 pub const ENHUFF = enhuff(false);
 const SORTED_ENHUFF = enhuff(true);
+/// Huffman decoding table
 pub const DEHUFF = dehuff();
 
 fn lt(_: void, lhs: Enhuff, rhs: Enhuff) bool {
     return lhs.len < rhs.len;
 }
 
+/// Used to generate the encoding table at comptime.
 fn enhuff(sorted: bool) [257]Enhuff {
     var table = [257]Enhuff{
         .{ .code = &.{ 0b11111111, 0b11000000 }, .len = 13 },
@@ -295,6 +304,7 @@ fn enhuff(sorted: bool) [257]Enhuff {
     return table;
 }
 
+/// Generate the decoding table at comptime.
 fn dehuff() [21]Dehuff {
     var groups: [21]Dehuff = undefined;
     var i: usize = 0;

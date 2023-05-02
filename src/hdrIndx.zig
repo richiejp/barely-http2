@@ -1,9 +1,12 @@
+//! The HPACK decoder table implementation
+
 const std = @import("std");
 const mem = std.mem;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 
+/// Entries in the static table with both a name and value
 pub const StaticIndxBoth = enum(u8) {
     methodGet = 2,
     pathRoot = 4,
@@ -13,10 +16,12 @@ pub const StaticIndxBoth = enum(u8) {
     status404 = 13,
 };
 
+/// Entries in the static table where just the name is defined
 pub const StaticIndxName = enum(u8) {
     authority = 1,
 };
 
+/// How a header field is encoded
 pub const HdrFieldRepr = enum {
     /// 6.1 Indexed Header Field Representation
     /// Prefix: 1
@@ -51,6 +56,10 @@ pub const HdrFieldRepr = enum {
     }
 };
 
+/// Union of header field structs used for declaring what data we wish
+/// to send.
+///
+/// We don't bother to add values to the index so they are left as void.
 pub const Hdr = union(HdrFieldRepr) {
     indexed: StaticIndxBoth,
     indexedNameAddValue: void,
@@ -59,30 +68,54 @@ pub const Hdr = union(HdrFieldRepr) {
     litNameLitValue: struct { name: []const u8, value: []const u8 },
 };
 
+/// A decoded header field.
 pub const HdrConst = struct {
     name: []const u8,
     value: []const u8,
 };
 
+/// The content of the table entries; A FIFO buffer.
+///
+/// It's a buffer with capacity 3x the size of the minimum table size
+/// required by HPACK. This allows us to keep adding entries in
+/// contiguous chunks with only an occasional copy.
+///
+/// New entries are added before start and their length subtracted
+/// from start.  When start gets below the minimum table size,
+/// everything is shifted backwards.
+///
+/// Only 2X the table size would be needed except that a new entry can
+/// reference the index of an entry which is about to be removed.
 const HdrData = struct {
+    /// The start of the first entry (most recently added)
     start: u16 = 2 * 4096,
+    /// Where the start was at the previous copy to shift everything backwards.
+    /// Needed to correct indexes for copied items.
     prevStart: u16 = 3 * 4096,
+    /// The length of the current entries
     len: u16 = 0,
+    /// The data
     vec: [3 * 4096]u8 = undefined,
 };
 
+/// An entry in the table data. Sort of like a slice, but using
+/// 16-bit indexes.
 const HdrPtr = struct {
     start: u16,
     nameLen: u16,
     valueLen: u16,
 };
 
+/// An inner table indexing the table's entries. Needed because the
+/// entries are uneven.
 const HdrIndx = struct {
     start: u8 = 127,
     len: u8 = 0,
     vec: [256]HdrPtr = undefined,
 };
 
+/// The encapsulating Table struct because I forgot that files in Zig
+/// are structs.
 pub const Table = struct {
     data: HdrData = HdrData{},
     indx: HdrIndx = HdrIndx{},
@@ -92,6 +125,9 @@ pub const Table = struct {
         return self.data.vec.len / 3;
     }
 
+    /// Get an entry from the table. The returned struct is borrowed
+    /// and needs to be copied if it is to be used after it has been
+    /// evicted from the table.
     pub fn get(self: *Table, i: u8) !HdrConst {
         const data = &self.data;
         const indx = &self.indx;
@@ -121,12 +157,15 @@ pub const Table = struct {
         };
     }
 
+    /// The length of the table according to the HPACK spec
     fn nominalLen(self: *Table, name: []const u8, value: []const u8) usize {
         const estimated_overhead = 32 * (1 + @as(usize, self.indx.len));
 
         return self.data.len + name.len + value.len + estimated_overhead;
     }
 
+    /// Add an entry to the table. The name and value arguments can
+    /// point to an existing entry which will evict itself.
     pub fn add(self: *Table, name: []const u8, value: []const u8) !void {
         const data = &self.data;
         const indx = &self.indx;

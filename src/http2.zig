@@ -22,6 +22,9 @@ const FrameType = enum(u8) {
     _,
 };
 
+// In a packed struct bool is one bit in length, so we can represent
+// the individual flags as struct fields.
+
 const DataFlags = packed struct {
     endStream: bool,
     unused: u6 = 0,
@@ -49,6 +52,11 @@ comptime {
     }
 }
 
+/// Tagged union of the frame flags. It's a tagged union for the silly
+/// reason that they automatically get printed correctly. The type
+/// field in FrameHdr already provides the tag, but I don't think this
+/// can be expressed in Zig. There are possible alternatives I haven't
+/// tried to avoid this repetition.
 const FrameFlags = union(enum) {
     data: DataFlags,
     headers: HeadersFlags,
@@ -57,11 +65,24 @@ const FrameFlags = union(enum) {
     unknown: u8,
 };
 
+/// All HTTP/2 traffic is made up of frames with a fixed sized header
+/// of the same format. Each frame specifies its type and payload
+/// length. On an abstract level this makes parsing HTTP/2 traffic
+/// easy.
+///
+/// The only complicatin in Zig being the interactiong between
+/// endianess and packed u24. Otherwise we could declare the flags as
+/// u8, mark the struct as packed then do a single @ptrCast. I tried
+/// something like this, but got in a mess and settled on the below.
 pub const FrameHdr = struct {
+    /// Length of the frame's payload
     length: u24,
+    /// How we should interpret everything that follows
     type: FrameType,
     flags: FrameFlags,
+    /// A reserved bit, which we can set to 1 as an act of rebellion.
     r: bool = false,
+    /// The stream ID or zero if this frame applies to the connection.
     id: u31,
 
     pub fn from(buf: *const [9]u8) FrameHdr {
@@ -97,11 +118,21 @@ pub const FrameHdr = struct {
     }
 };
 
+/// The payload for a data frame. The padding is only present if the
+/// padding flag is set.
 const DataPayload = struct {
     data: []const u8,
     padding: []const u8,
 };
 
+/// The payload of a headers frame is HPACK encoded. We always need to
+/// decode all the headers to make sure the decoding table is correct
+/// (unless we stop caring about any headers on this connection).
+///
+/// This is a one-shot iterator which returns borrowed values. Values
+/// returned by next should be copied before calling next again or
+/// moving on. The decoder's state is mutated, so the iterator can not
+/// be restarted without an old copy of the decoder.
 const HeadersPayload = struct {
     headerBlockFragment: []const u8,
 
@@ -145,6 +176,8 @@ const Setting = union(SettingId) {
     maxHeaderListSize: u32,
 };
 
+/// Settings limit what we can send to the other side. This is
+/// essentially an iterator which returns borrowed values.
 const SettingsPayload = struct {
     settings: []const u8,
     used: usize,
@@ -178,6 +211,8 @@ const SettingsPayload = struct {
     }
 };
 
+/// Rate limiting; we're not supposed to send more data than has been
+/// added to the window.
 const WindowUpdatePayload = struct {
     r: bool,
     windowSizeIncrement: u31,
@@ -197,6 +232,9 @@ const Payload = union(enum) {
     not_implemented: void,
 };
 
+/// A partially or fully decoded frame. In some cases the payload
+/// field can be used to get an iterator which will complete the
+/// decoding.
 pub const Frame = struct {
     hdr: FrameHdr,
     payload: Payload,
@@ -401,7 +439,7 @@ pub fn main() !void {
     var h2c = try NetConnection.init(std.heap.page_allocator, 1 << 14);
     defer h2c.deinit();
 
-    const self_addr = try net.Address.resolveIp("127.0.0.1", 9001);
+    const self_addr = try net.Address.resolveIp("127.0.0.1", 9000);
     var listener = net.StreamServer.init(.{});
     try listener.listen(self_addr);
     defer listener.close();
