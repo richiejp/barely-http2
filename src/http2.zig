@@ -253,6 +253,23 @@ pub const Frame = struct {
     }
 };
 
+/// HTTP/2's idea of a connection which wraps around the underlying
+/// stream.  Usually the underlying stream will be a TCP connection,
+/// but could by anything which provides the Reader and Writer
+/// interfaces e.g. a file or buffer with captured frame data in.
+///
+/// This is essentially an iterator interface to the underlying
+/// data. Which recurses into iterators for the various types of frame
+/// payload.
+///
+/// It only allocates memory during init and we can reuse the
+/// connection object by calling reinit. This preempts the No. 1
+/// performance issue I have seen in most open source libraries.
+///
+/// One should assume that any pointers it returns are to buffers it
+/// allocated at init time. So their lifetime is only until the next
+/// call to nextFrame[Hdr]. Long lived data therefor needs to be
+/// copied. Whether this is an issue depends on the use case.
 pub fn Connection(comptime Reader: type, comptime Writer: type) type {
     const preface = [_]u8{
         0x50, 0x52, 0x49, 0x20, 0x2a, 0x20, 0x48, 0x54, 0x54, 0x50, 0x2f,
@@ -330,6 +347,10 @@ pub fn Connection(comptime Reader: type, comptime Writer: type) type {
             return in[0..needed];
         }
 
+        /// Start the HTTP/2 connection as the server and assuming
+        /// "prior knowledge". This is a simple case of reading in the
+        /// magic string (preface) sent by the client and sending a
+        /// settings frame.
         pub fn start(self: *Self) !void {
             const pface = try self.read(preface.len);
 
@@ -350,10 +371,17 @@ pub fn Connection(comptime Reader: type, comptime Writer: type) type {
             try self.writer.writeAll(empty_settings.to(self.frame_out));
         }
 
+        /// Lower level iterator which returns just the frame
+        /// header. Potentially this can be used to skip over
+        /// uninteresting frames.
         pub fn nextFrameHdr(self: *Self) !FrameHdr {
             return FrameHdr.from((try self.read(9))[0..9]);
         }
 
+        /// Returns a slightly higher level Frame payload iterator and
+        /// frame header object. Still pretty low level. We'd probably
+        /// want to abstract this into streams and abstract streams
+        /// into requests and responses.
         pub fn nextFrame(self: *Self) !Frame {
             const hdr = try self.nextFrameHdr();
 
@@ -365,6 +393,8 @@ pub fn Connection(comptime Reader: type, comptime Writer: type) type {
             );
         }
 
+        /// Send a HPACK headers frame with some headers. Nothing todo
+        /// with the frame header itself. Totally confusing.
         pub fn sendHeaders(
             self: *Self,
             opts: HeadersOpts,
@@ -435,6 +465,8 @@ fn serve(h2c: *NetConnection) !void {
     }
 }
 
+/// One of two entry points in this code base, just prints the frames
+/// it receives and sends an empty 200 OK response.
 pub fn main() !void {
     var h2c = try NetConnection.init(std.heap.page_allocator, 1 << 14);
     defer h2c.deinit();
