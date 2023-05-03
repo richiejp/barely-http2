@@ -143,13 +143,16 @@ fn serveFiles(h2c: *http2.NetConnection, dir: fs.Dir) !void {
                 }
             },
             .headers => |*headers| {
+                var path_buf: [fs.MAX_PATH_BYTES]u8 = undefined;
                 var path: ?[]const u8 = null;
 
                 while (headers.next()) |h| {
                     std.log.info("    {s} => {s}", h);
 
-                    if (mem.eql(u8, ":path", h.name))
-                        path = h.value;
+                    if (mem.eql(u8, ":path", h.name) and h.value.len <= path_buf.len) {
+                        mem.copy(u8, &path_buf, h.value);
+                        path = path_buf[0..h.value.len];
+                    }
                 } else |err| {
                     if (err != error.EndOfData) return err;
                 }
