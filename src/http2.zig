@@ -177,7 +177,7 @@ const Setting = union(SettingId) {
 };
 
 /// Settings limit what we can send to the other side. This is
-/// essentially an iterator which returns borrowed values.
+/// essentially an iterator which returns a tagged u32
 const SettingsPayload = struct {
     settings: []const u8,
     used: usize,
