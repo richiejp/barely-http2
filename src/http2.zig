@@ -180,21 +180,21 @@ const Setting = union(SettingId) {
 /// essentially an iterator which returns a tagged u32
 const SettingsPayload = struct {
     settings: []const u8,
-    used: usize,
 
     pub fn init(buf: []const u8) SettingsPayload {
-        return .{ .settings = buf, .used = 0 };
+        return .{ .settings = buf };
     }
 
     pub fn next(self: *SettingsPayload) !Setting {
-        if (self.settings.len - self.used == 0)
+        if (self.settings.len == 0)
             return error.EndOfData;
 
-        if (self.settings.len - self.used < 6)
+        if (self.settings.len < 6)
             return error.UnexpectedEndOfData;
 
-        const buf = self.settings[self.used..][0..6];
-        self.used += 6;
+        const buf = self.settings[0..6];
+
+        self.settings = self.settings[6..];
 
         const id = mem.readIntBig(u16, buf[0..2]);
         const val = mem.readIntBig(u32, buf[2..]);
